@@ -1,0 +1,9 @@
+{
+  "dump": {
+    "file_path": "dump"
+  },
+  "log": {
+    "file_path": "./log",
+    "error_level": "debug"
+  }
+}
