@@ -27,8 +27,7 @@ const zeroPadding = (string, padSize=8, padChar='0') => {
  */
 process.env.NODE_CONFIG_DIR = path.join(__dirname, 'config');
 const config = require('config');
-const logFilePrefix = config.get('log.file_prefix');
-
+const filePrefix = config.get('flywheel.file_prefix');
 /**
  * ファイル準備
  */
@@ -38,11 +37,11 @@ const dateFormatted = dateFormat(now, "yyyymmdd");
 const dateTimeFormatted = dateFormat(now, "yyyymmddHHMMss");
 
 // dumpファイルパス＆ファイル名設定
-let dumpFilePath = config.get('dump.file_path');
+let dumpFilePath = config.get('flywheel.file_path');
 if(!path.isAbsolute(dumpFilePath)) {
     dumpFilePath = path.resolve(__dirname, dumpFilePath);
 }
-const dumpFileName = `${dateTimeFormatted}_${logFilePrefix}.dump`;
+const dumpFileName = `${filePrefix}-${dateTimeFormatted}.dump`;
 dumpFilePath = path.resolve(dumpFilePath, dumpFileName);
 
 // ログファイルパス＆ファイル名設定
@@ -50,7 +49,7 @@ let logFilePath = config.get('log.file_path');
 if(!path.isAbsolute(logFilePath)) {
     logFilePath = path.resolve(__dirname, logFilePath);
 }
-const logFileName = logFilePrefix + '-' + dateFormatted + '.log';
+const logFileName = filePrefix + '-' + dateFormatted + '.log';
 
 // エラーレベル設定
 const validErrorLevel = ["trace", "debug", "info", "warn", "error", "fatal"];

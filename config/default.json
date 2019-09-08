@@ -1,11 +1,14 @@
 {
-  "dump": {
+  "flywheel": {
     "file_path": "./dumps",
     "file_prefix": "flywheel"
   },
+  "parachute": {
+    "file_path": "./dumps",
+    "file_prefix": "parachute"
+  },
   "log": {
     "file_path": "./log",
-    "file_prefix": "flywheel",
     "error_level": "debug"
   }
 }
