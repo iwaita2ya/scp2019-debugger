@@ -6,8 +6,21 @@ const { createReadStream } = require('fs');
 const { createInterface } = require('readline');
 const path = require('path');
 const dateFormat = require('dateformat');
-const dumpFileName = '20190820_flywheel.dump';
+// const dumpFileName = '20190820_02_flywheel.dump';
+const dumpFileName = '20190908_01_flywheel.dump';
 const dumpFilePath = path.resolve(__dirname, 'dumps', dumpFileName);
+
+/**
+ * zeroPadding
+ * @param string
+ * @param padSize
+ * @param padChar
+ * @returns {*}
+ */
+const zeroPadding = (string, padSize=8, padChar='0') => {
+    while (string.length < (padSize || 2)) {string = padChar + string;}
+    return string;
+};
 
 /**
  * 設定読み込み
@@ -158,13 +171,13 @@ const readDumpFile = (filePath) => new Promise (
     // console.log('Send Dump Command');
     // await sendCommand(port, [0x40, 0x0d]);
     //
-    // // Close Port
-    // logger.debug('Close Port');
-    // if(port.isOpen) {
-    //     port.close();
-    // } else {
-    //     console.warn('Port is not opened.');
-    // }
+    // Close Port
+    logger.debug('Close Port');
+    if(port.isOpen) {
+        port.close();
+    } else {
+        console.warn('Port is not opened.');
+    }
 
     // Read Dump File
     logger.debug(`Dump File: ${dumpFilePath}`);
@@ -194,8 +207,89 @@ const readDumpFile = (filePath) => new Promise (
 
         console.log('File processed.');
 
+        /**
+         * struct SystemParameters {
+         *   uint8_t statusFlags;
+         *   int16_t gyroBiasRawX;   // ジャイロの補正値(X軸)
+         *   int16_t gyroBiasRawY;   // ジャイロの補正値(Y軸)
+         *   int16_t gyroBiasRawZ;   // ジャイロの補正値(Z軸)
+         *   uint8_t enableLogging;  // ロギング設定 (0x00:無効 0x01:有効)
+         *   uint16_t logPointer;    // 最終ログ格納アドレス (0x0020-0x0800)
+         *   time_t logStartTime;    // ロギング開始時刻(RTCから取得する）
+         * };
+         */
+
         //TODO: display result
-        console.log(byteDataSet);
+        const currentStatus = Buffer.from(byteDataSet[0], 'hex').readUInt8(0).toString(2);
+        const gyroBiasRawX = Buffer.from(byteDataSet[1] + byteDataSet[2], 'hex').readInt16LE(0);
+        const gyroBiasRawY = Buffer.from(byteDataSet[3] + byteDataSet[4], 'hex').readInt16LE(0);
+        const gyroBiasRawZ = Buffer.from(byteDataSet[5] + byteDataSet[6], 'hex').readInt16LE(0);
+        const enableLogging = Buffer.from(byteDataSet[7], 'hex').readUInt8(0);
+        const logPointer = Buffer.from(byteDataSet[8] + byteDataSet[9], 'hex').readUInt16LE(0);
+        const logStartTime = Buffer.from(byteDataSet[10] + byteDataSet[11] + byteDataSet[12] + byteDataSet[13], 'hex').readUInt32LE(0);
+
+        // Status Flag
+        console.log('----- Config Value -----');
+        console.log(`Status     : ${zeroPadding(currentStatus,8)}`);
+        console.log(`gBiasRawX  : ${gyroBiasRawX}`);
+        console.log(`gBiasRawX  : ${gyroBiasRawY}`);
+        console.log(`gBiasRawX  : ${gyroBiasRawZ}`);
+        console.log(`Enable Log : ` + (enableLogging === 1 ? 'Yes' : 'No'));
+        console.log(`Log Pointer: 0x${zeroPadding(logPointer.toString(16), 4)}`);
+        console.log(`logStart   : ${logStartTime}`);
+
+        /**
+         * uint8_t _currentStatus,
+         * int16_t _gz_raw,
+         * uint8_t _aDutyIndex,
+         * uint8_t _bDutyIndex,
+         * uint16_t _aRPM,
+         * uint16_t _bRPM
+         */
+
+        console.log('----- Output Log -----');
+        console.log('     ADDR,   STATUS,  gzRaw,aIdx,bIdx,  aRPM,  bRPM');
+
+        //MEMO: 最終ログポインタから順番に表示させる版
+        //
+        // let currentIndex = logPointer;
+        // const dataSize = 9; // bytes for each dataset
+        //
+        // while ((currentIndex - dataSize) > 24) {
+        //     let dataStart = currentIndex - dataSize;
+        //
+        //     const status = Buffer.from(byteDataSet[dataStart], 'hex').readUInt8(0).toString(2);
+        //     const gz_raw = Buffer.from(byteDataSet[dataStart + 1] + byteDataSet[dataStart + 2], 'hex').readInt16LE(0).toString();
+        //     const aDutyIndex = Buffer.from(byteDataSet[dataStart + 3], 'hex').readUInt8(0).toString();
+        //     const bDutyIndex = Buffer.from(byteDataSet[dataStart + 4], 'hex').readUInt8(0).toString();
+        //     const aRPM = Buffer.from(byteDataSet[dataStart + 5] + byteDataSet[currentIndex - 3], 'hex').readUInt16LE(0).toString();
+        //     const bRPM = Buffer.from(byteDataSet[dataStart + 6] + byteDataSet[currentIndex - 1], 'hex').readUInt16LE(0).toString();
+        //
+        //     console.log(`${zeroPadding(dataStart.toString(16), 4)}-${zeroPadding((dataStart+9).toString(16), 4)}, ${zeroPadding(status,8)}, ${zeroPadding(gz_raw, 5, ' ')}, ${zeroPadding(aDutyIndex, 3, ' ')}, ${zeroPadding(bDutyIndex, 3, ' ')}, ${zeroPadding(aRPM, 5, ' ')}, ${zeroPadding(bRPM, 5, ' ')}`); // status
+        //
+        //     currentIndex -= dataSize;
+        // }
+
+        //MEMO: 0x20 から順番に表示させる版
+        let currentIndex = 32; // 0x20
+        const dataSize = 9; // bytes for each dataset
+
+        while (currentIndex < logPointer) {
+            let dataStart = currentIndex;
+
+            const status = Buffer.from(byteDataSet[dataStart], 'hex').readUInt8(0).toString(2);
+            const gz_raw = Buffer.from(byteDataSet[dataStart + 1] + byteDataSet[dataStart + 2], 'hex').readInt16LE(0).toString();
+            const aDutyIndex = Buffer.from(byteDataSet[dataStart + 3], 'hex').readUInt8(0).toString();
+            const bDutyIndex = Buffer.from(byteDataSet[dataStart + 4], 'hex').readUInt8(0).toString();
+            const aRPM = Buffer.from(byteDataSet[dataStart + 5] + byteDataSet[currentIndex + 6], 'hex').readUInt16LE(0).toString();
+            const bRPM = Buffer.from(byteDataSet[dataStart + 7] + byteDataSet[currentIndex + 8], 'hex').readUInt16LE(0).toString();
+
+            console.log(`${zeroPadding(dataStart.toString(16), 4)}-${zeroPadding((dataStart+9).toString(16), 4)}, ${zeroPadding(status,8)}, ${zeroPadding(gz_raw, 6, ' ')}, ${zeroPadding(aDutyIndex, 3, ' ')}, ${zeroPadding(bDutyIndex, 3, ' ')}, ${zeroPadding(aRPM, 5, ' ')}, ${zeroPadding(bRPM, 5, ' ')}`); // status
+
+            currentIndex += dataSize;
+        }
+
+        // console.log(byteDataSet);
 
     } catch (err) {
         logger.error(err);
