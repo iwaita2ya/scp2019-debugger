@@ -7,8 +7,8 @@ const { createInterface } = require('readline');
 const path = require('path');
 const dateFormat = require('dateformat');
 // const dumpFileName = '20190820_02_flywheel.dump';
-const dumpFileName = '20190908_01_flywheel.dump';
-const dumpFilePath = path.resolve(__dirname, 'dumps', dumpFileName);
+// const dumpFileName = '20190908_01_flywheel.dump';
+// const dumpFilePath = path.resolve(__dirname, 'dumps', dumpFileName);
 
 /**
  * zeroPadding
@@ -27,14 +27,23 @@ const zeroPadding = (string, padSize=8, padChar='0') => {
  */
 process.env.NODE_CONFIG_DIR = path.join(__dirname, 'config');
 const config = require('config');
-const logFilePrefix = 'flywheel';
+const logFilePrefix = config.get('log.file_prefix');
 
 /**
- * ログファイル準備
+ * ファイル準備
  */
 // 日付取得
 const now = new Date();
 const dateFormatted = dateFormat(now, "yyyymmdd");
+const dateTimeFormatted = dateFormat(now, "yyyymmddHHMMss");
+
+// dumpファイルパス＆ファイル名設定
+let dumpFilePath = config.get('dump.file_path');
+if(!path.isAbsolute(dumpFilePath)) {
+    dumpFilePath = path.resolve(__dirname, dumpFilePath);
+}
+const dumpFileName = `${dateTimeFormatted}_${logFilePrefix}.dump`;
+dumpFilePath = path.resolve(dumpFilePath, dumpFileName);
 
 // ログファイルパス＆ファイル名設定
 let logFilePath = config.get('log.file_path');
@@ -55,13 +64,14 @@ if((validErrorLevel.indexOf(errorLogLevel) === -1)) {
 const log4js = require('log4js');
 log4js.configure({
     appenders: {
+        console: { type: 'console' },
         dump_flywheel: { type: 'file', filename: path.join(logFilePath, logFileName) }
     },
     categories: {
-        default: { appenders: ['dump_flywheel'], level: errorLogLevel }
+        default: { appenders: ['console','dump_flywheel'], level: errorLogLevel }
     }
 });
-const logger = log4js.getLogger('dump_flywheel');
+const logger = log4js.getLogger();
 
 /**
  * シリアル設定
@@ -86,27 +96,35 @@ const {ByteLength} = SerialPort.parsers;// バイト長で切る
 const parser = port.pipe(new ByteLength({length:9}));    // バイト長で区切る場合
 
 // data receiver
+// parser.on('data', (data) => {
+//     /**
+//      * uint8_t _currentStatus,
+//      * int16_t _gz_raw,
+//      * uint8_t _aDutyIndex,
+//      * uint8_t _bDutyIndex,
+//      * uint16_t _aRPM,
+//      * uint16_t _bRPM
+//      */
+//     let buf = Buffer.from(data);
+//
+//     const currentStatus = buf.readUInt8(0);
+//     const gz_raw = buf.readInt16LE(1);
+//     const aDutyIndex = buf.readUInt8(3);
+//     const bDutyIndex = buf.readUInt8(4);
+//     const aRPM = buf.readUInt16LE(5);
+//     const bRPM = buf.readUInt16LE(7);
+//
+//     logger.debug(currentStatus + "," + gz_raw + "," + aDutyIndex + "," + bDutyIndex + "," + aRPM + "," + bRPM);
+//
+//     //TODO: ファイルに書き出す
+// });
+
 parser.on('data', (data) => {
-    /**
-     * uint8_t _currentStatus,
-     * int16_t _gz_raw,
-     * uint8_t _aDutyIndex,
-     * uint8_t _bDutyIndex,
-     * uint16_t _aRPM,
-     * uint16_t _bRPM
-     */
-    let buf = Buffer.from(data);
-
-    const currentStatus = buf.readUInt8(0);
-    const gz_raw = buf.readInt16LE(1);
-    const aDutyIndex = buf.readUInt8(3);
-    const bDutyIndex = buf.readUInt8(4);
-    const aRPM = buf.readUInt16LE(5);
-    const bRPM = buf.readUInt16LE(7);
-
-    console.log(currentStatus + "," + gz_raw + "," + aDutyIndex + "," + bDutyIndex + "," + aRPM + "," + bRPM);
-
-    //TODO: ファイルに書き出す
+    try {
+        fs.appendFileSync(dumpFilePath, data);
+    }catch(e){
+        logger.error(e);
+    }
 });
 
 port.on('error', err => console.error(err.message));
@@ -158,19 +176,35 @@ const readDumpFile = (filePath) => new Promise (
     }
 );
 
+/**
+ * Wait for specific msec
+ * @param msec
+ * @returns {Promise}
+ */
+const waitForData = (msec) => new Promise(
+    resolve => {
+        setTimeout(() => {
+            resolve();
+        }, msec);
+    }
+);
+
 //------------------------------------------------
 // データ送信テスト
 //------------------------------------------------
 (async () => {
 
     // Open Port
-    // logger.debug('Port Open.');
-    // await openPort(port);
-    //
-    // // Send Dump Command
-    // console.log('Send Dump Command');
-    // await sendCommand(port, [0x40, 0x0d]);
-    //
+    logger.debug('Port Open.');
+    await openPort(port);
+
+    // Send Dump Command
+    logger.debug('Send Dump Command');
+    await sendCommand(port, [0x41, 0x0d]); // ascii format
+
+    await waitForData(20000);
+    logger.debug(`Dump saved at: ${dumpFilePath}`);
+
     // Close Port
     logger.debug('Close Port');
     if(port.isOpen) {
@@ -179,8 +213,13 @@ const readDumpFile = (filePath) => new Promise (
         console.warn('Port is not opened.');
     }
 
+    /**
+     * ダンプファイル解析スタート
+     */
+    const csvFilePath = `${dumpFilePath}.csv`;
+
     // Read Dump File
-    logger.debug(`Dump File: ${dumpFilePath}`);
+    logger.debug(`Read Dump File: ${dumpFilePath}`);
     try {
         const readline = createInterface({
             input: createReadStream(dumpFilePath),
@@ -190,12 +229,12 @@ const readDumpFile = (filePath) => new Promise (
         let byteDataSet = {};
         readline.on('line', (line) => {
             if(line.match(/^[0-9a-f]{4}\s([0-9a-f]{2}\s?){16}/gi)) {
-                // console.log(line);
+                // logger.debug(line);
                 const lineData = line.split(' ');
                 const offset = Buffer.from(lineData.shift(), 'hex').readUInt16BE(0);
-                //console.log(`offset:${offset}`);
+                //logger.debug(`offset:${offset}`);
                 for (let i=0; i<16; i++) {
-                    //console.log(lineData[i]);
+                    //logger.debug(lineData[i]);
                     byteDataSet[offset+i] = lineData[i];
                 }
             } else {
@@ -205,7 +244,7 @@ const readDumpFile = (filePath) => new Promise (
         // await till the end of file read
         await once(readline, 'close');
 
-        console.log('File processed.');
+        logger.debug('Parse dump data and show the result');
 
         /**
          * struct SystemParameters {
@@ -238,6 +277,20 @@ const readDumpFile = (filePath) => new Promise (
         console.log(`Log Pointer: 0x${zeroPadding(logPointer.toString(16), 4)}`);
         console.log(`logStart   : ${logStartTime}`);
 
+        try {
+            fs.appendFileSync(csvFilePath,`----- Config Value -----\r\n`);
+            fs.appendFileSync(csvFilePath,`Status     : ${zeroPadding(currentStatus,8)}\r\n`);
+            fs.appendFileSync(csvFilePath,`gBiasRawX  : ${gyroBiasRawX}\r\n`);
+            fs.appendFileSync(csvFilePath,`gBiasRawX  : ${gyroBiasRawY}\r\n`);
+            fs.appendFileSync(csvFilePath,`gBiasRawX  : ${gyroBiasRawZ}\r\n`);
+            fs.appendFileSync(csvFilePath,`Enable Log : ` + (enableLogging === 1 ? 'Yes' : 'No') + `\r\n`);
+            fs.appendFileSync(csvFilePath,`Log Pointer: 0x${zeroPadding(logPointer.toString(16), 4)}\r\n`);
+            fs.appendFileSync(csvFilePath,`logStart   : ${logStartTime}\r\n`);
+
+        }catch(e){
+            logger.error(e);
+        }
+
         /**
          * uint8_t _currentStatus,
          * int16_t _gz_raw,
@@ -250,7 +303,15 @@ const readDumpFile = (filePath) => new Promise (
         console.log('----- Output Log -----');
         console.log('     ADDR,   STATUS,  gzRaw,aIdx,bIdx,  aRPM,  bRPM');
 
-        //MEMO: 最終ログポインタから順番に表示させる版
+        try {
+            fs.appendFileSync(csvFilePath,`----- Output Log -----\r\n`);
+            fs.appendFileSync(csvFilePath,`     ADDR,   STATUS,  gzRaw,aIdx,bIdx,  aRPM,  bRPM\r\n`);
+
+        }catch(e){
+            logger.error(e);
+        }
+
+        //MEMO: #1 最終ログポインタから順番に表示させる版
         //
         // let currentIndex = logPointer;
         // const dataSize = 9; // bytes for each dataset
@@ -270,7 +331,7 @@ const readDumpFile = (filePath) => new Promise (
         //     currentIndex -= dataSize;
         // }
 
-        //MEMO: 0x20 から順番に表示させる版
+        //MEMO: #2 0x20 から順番に表示させる版
         let currentIndex = 32; // 0x20
         const dataSize = 9; // bytes for each dataset
 
@@ -284,7 +345,14 @@ const readDumpFile = (filePath) => new Promise (
             const aRPM = Buffer.from(byteDataSet[dataStart + 5] + byteDataSet[currentIndex + 6], 'hex').readUInt16LE(0).toString();
             const bRPM = Buffer.from(byteDataSet[dataStart + 7] + byteDataSet[currentIndex + 8], 'hex').readUInt16LE(0).toString();
 
-            console.log(`${zeroPadding(dataStart.toString(16), 4)}-${zeroPadding((dataStart+9).toString(16), 4)}, ${zeroPadding(status,8)}, ${zeroPadding(gz_raw, 6, ' ')}, ${zeroPadding(aDutyIndex, 3, ' ')}, ${zeroPadding(bDutyIndex, 3, ' ')}, ${zeroPadding(aRPM, 5, ' ')}, ${zeroPadding(bRPM, 5, ' ')}`); // status
+            console.log(`${zeroPadding(dataStart.toString(16), 4)}-${zeroPadding((dataStart+8).toString(16), 4)}, ${zeroPadding(status,8)}, ${zeroPadding(gz_raw, 6, ' ')}, ${zeroPadding(aDutyIndex, 3, ' ')}, ${zeroPadding(bDutyIndex, 3, ' ')}, ${zeroPadding(aRPM, 5, ' ')}, ${zeroPadding(bRPM, 5, ' ')}`);
+
+            try {
+                fs.appendFileSync(csvFilePath,`${zeroPadding(dataStart.toString(16), 4)}-${zeroPadding((dataStart+8).toString(16), 4)}, ${zeroPadding(status,8)}, ${zeroPadding(gz_raw, 6, ' ')}, ${zeroPadding(aDutyIndex, 3, ' ')}, ${zeroPadding(bDutyIndex, 3, ' ')}, ${zeroPadding(aRPM, 5, ' ')}, ${zeroPadding(bRPM, 5, ' ')}\r\n`);
+
+            }catch(e){
+                logger.error(e);
+            }
 
             currentIndex += dataSize;
         }
@@ -294,7 +362,6 @@ const readDumpFile = (filePath) => new Promise (
     } catch (err) {
         logger.error(err);
     }
-
 
 
     // const fileStream = fs.createReadStream(dumpFilePath);
@@ -320,6 +387,8 @@ const readDumpFile = (filePath) => new Promise (
     //     }
     // }
     // console.log(byteDataSet.length);
+
+    logger.debug('Dump Completed.');
 
 })();
 
