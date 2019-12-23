@@ -1,4 +1,5 @@
-spc2019
+Dump binary data from actuator/parachute modules and save as CSV file.
+Used at Space Probe Contest 2019
 
 #### 実行環境準備
 - node が必要です。最新版の node をインストールしてください
